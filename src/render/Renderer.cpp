@@ -14,7 +14,13 @@ namespace {
 constexpr float kPi = 3.14159265f;
 constexpr float kCapsuleGap = 8.0f;
 constexpr float kCornerRadius = 8.0f;
-const D2D1_COLOR_F kCapsuleFill = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.10f);
+constexpr float kStripRadius = 12.0f;
+// Translucent Win11-style card drawn inside the DComp tree (stands in for a
+// real backdrop brush; WCA acrylic can't be used on a NOREDIRECTIONBITMAP
+// window). Alpha high enough that capsules are legible over any taskbar.
+const D2D1_COLOR_F kStripFill = D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.72f);
+const D2D1_COLOR_F kStripBorder = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.10f);
+const D2D1_COLOR_F kCapsuleFill = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f);
 const D2D1_COLOR_F kTextColor = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f);
 const D2D1_COLOR_F kLabelColor = D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.60f);
 const D2D1_COLOR_F kAccentColor = D2D1::ColorF(0.38f, 0.62f, 1.0f, 0.95f);
@@ -131,6 +137,17 @@ HRESULT Renderer::DrawCapsules(const std::vector<CapsuleRenderData>& capsules) {
     d2dContext_->Clear(D2D1::ColorF(0, 0, 0, 0));
 
     if (!capsules.empty()) {
+        // Translucent card behind the capsules (frosted-glass stand-in).
+        ComPtr<ID2D1SolidColorBrush> stripFill, stripBorder;
+        d2dContext_->CreateSolidColorBrush(kStripFill, stripFill.GetAddressOf());
+        d2dContext_->CreateSolidColorBrush(kStripBorder, stripBorder.GetAddressOf());
+        D2D1_ROUNDED_RECT strip = D2D1::RoundedRect(
+            D2D1::RectF(0.5f, 0.5f, static_cast<float>(width) - 0.5f,
+                        static_cast<float>(height) - 0.5f),
+            kStripRadius, kStripRadius);
+        if (stripFill) d2dContext_->FillRoundedRectangle(strip, stripFill.Get());
+        if (stripBorder) d2dContext_->DrawRoundedRectangle(strip, stripBorder.Get(), 1.0f);
+
         const float totalGap = kCapsuleGap * (capsules.size() - 1);
         const float capsuleWidth =
             (static_cast<float>(width) - totalGap) / capsules.size();

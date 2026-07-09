@@ -126,8 +126,13 @@ bool HostWindow::Create(HINSTANCE instance, const Config& config) {
     CWIN_LOG("renderer init hr=0x%08lX; window @ (%d,%d) %dx%d", initHr, x, y,
              kDefaultWidth, kDefaultHeight);
     if (FAILED(initHr)) return false;
-    const bool backdrop = ApplyBackdrop(hwnd_, DetectBackdropKind());
-    CWIN_LOG("backdrop applied=%d", backdrop ? 1 : 0);
+    // NOTE: SetWindowCompositionAttribute (WCA) acrylic is incompatible with a
+    // WS_EX_NOREDIRECTIONBITMAP DirectComposition window and suppresses the
+    // composited content (the window renders blank). The frosted-glass look is
+    // instead drawn inside the DComp visual tree by the renderer (translucent
+    // card fill). A real DComp backdrop brush is future work.
+    CWIN_LOG("backdrop: WCA disabled (drawn in DComp), detected kind=%d",
+             static_cast<int>(DetectBackdropKind()));
 
     scheduler_.Tick();
     const auto capsules = scheduler_.VisibleCapsules();
