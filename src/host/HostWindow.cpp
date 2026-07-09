@@ -1,5 +1,7 @@
 #include "HostWindow.h"
 
+#include "Log.h"
+
 namespace cwin {
 
 namespace {
@@ -43,6 +45,10 @@ void HostWindow::OnTick() {
         renderer_.DrawCapsules(scheduler_.VisibleCapsules());
         renderer_.Commit();
     }
+    // The taskbar is also topmost and relayouts frequently; re-assert our
+    // position above it so the capsules are not occluded.
+    SetWindowPos(hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 void HostWindow::PostTaskbarReport(const TaskbarReport& report) {
@@ -84,8 +90,11 @@ void HostWindow::ApplyTaskbarReport() {
 
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    renderer_.DrawCapsules(scheduler_.VisibleCapsules());
+    const auto capsules = scheduler_.VisibleCapsules();
+    const HRESULT hr = renderer_.DrawCapsules(capsules);
     renderer_.Commit();
+    CWIN_LOG("apply report: pos=(%d,%d) %dx%d draw hr=0x%08lX capsules=%zu", x, y,
+             width, height, hr, capsules.size());
 }
 
 bool HostWindow::Create(HINSTANCE instance, const Config& config) {
@@ -113,12 +122,18 @@ bool HostWindow::Create(HINSTANCE instance, const Config& config) {
         nullptr, nullptr, instance, this);
     if (!hwnd_) return false;
 
-    if (FAILED(renderer_.Initialize(hwnd_))) return false;
-    ApplyBackdrop(hwnd_, DetectBackdropKind());
+    const HRESULT initHr = renderer_.Initialize(hwnd_);
+    CWIN_LOG("renderer init hr=0x%08lX; window @ (%d,%d) %dx%d", initHr, x, y,
+             kDefaultWidth, kDefaultHeight);
+    if (FAILED(initHr)) return false;
+    const bool backdrop = ApplyBackdrop(hwnd_, DetectBackdropKind());
+    CWIN_LOG("backdrop applied=%d", backdrop ? 1 : 0);
 
     scheduler_.Tick();
-    renderer_.DrawCapsules(scheduler_.VisibleCapsules());
+    const auto capsules = scheduler_.VisibleCapsules();
+    const HRESULT drawHr = renderer_.DrawCapsules(capsules);
     renderer_.Commit();
+    CWIN_LOG("initial draw: %zu capsules, hr=0x%08lX", capsules.size(), drawHr);
 
     SetTimer(hwnd_, kTickTimerId, kTickIntervalMs, nullptr);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
