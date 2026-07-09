@@ -7,7 +7,25 @@
 #include "IpcServer.h"
 #include "Log.h"
 
+namespace {
+// Match the DPI space the injected shell reports in (explorer is
+// per-monitor-v2 aware, so its taskbar/reserved rects are physical pixels).
+// Without this the host is DPI-virtualized and SetWindowPos misplaces the
+// capsule window off-screen on scaled displays. Called before any window.
+void MakePerMonitorDpiAware() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) return;
+    using SetCtxFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
+    auto setCtx = reinterpret_cast<SetCtxFn>(
+        reinterpret_cast<void*>(GetProcAddress(user32, "SetProcessDpiAwarenessContext")));
+    if (setCtx) {
+        setCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);  // (HANDLE)-4
+    }
+}
+}  // namespace
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    MakePerMonitorDpiAware();
     cwin::Log::Init(L"host");
     CWIN_LOG("host start");
 
