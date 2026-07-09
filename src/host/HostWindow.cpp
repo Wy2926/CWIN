@@ -65,12 +65,24 @@ void HostWindow::ApplyTaskbarReport() {
     const int tbHeight = tb.bottom - tb.top;
     if (tbHeight <= 0) return;
 
-    // Companion strip: sit inside the taskbar, right-aligned before the tray.
     const int height = tbHeight - 2 * kCapsuleMarginPx;
-    const int right = tb.right - kTrayReservePx;
-    const int x = right - kDefaultWidth;
     const int y = tb.top + kCapsuleMarginPx;
-    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, kDefaultWidth, height,
+
+    // Prefer the exact gap the shell carved/computed; otherwise fall back to a
+    // fixed inset before the tray (companion overlay).
+    int x;
+    int width;
+    const RECT& rr = report.reservedRect;
+    if (rr.right > rr.left) {
+        x = rr.left + kCapsuleMarginPx;
+        width = (rr.right - rr.left) - 2 * kCapsuleMarginPx;
+    } else {
+        width = kDefaultWidth;
+        x = (tb.right - kTrayReservePx) - width;
+    }
+    if (width <= 0) return;
+
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     renderer_.DrawCapsules(scheduler_.VisibleCapsules());
     renderer_.Commit();
