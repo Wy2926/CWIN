@@ -4,6 +4,7 @@
 
 #include "IpcClient.h"
 #include "IpcProtocol.h"
+#include "Log.h"
 #include "TaskbarAdapter.h"
 
 namespace {
@@ -20,13 +21,16 @@ constexpr int kReserveWidthPx = 360;
 // companion window draws). Reservation is re-applied every tick because
 // explorer relayouts the task band on its own updates.
 DWORD WINAPI ReportThread(LPVOID) {
+    cwin::Log::Init(L"shell");
+    CWIN_LOG("shell attached to explorer, report thread up");
     auto adapter = cwin::CreateTaskbarAdapter();
     cwin::TaskbarReport last{};
     bool hasLast = false;
 
     while (g_running) {
         cwin::TaskbarLayout layout;
-        if (adapter && adapter->QueryLayout(layout)) {
+        const bool measured = adapter && adapter->QueryLayout(layout);
+        if (measured) {
             const bool carved = adapter->ReserveSpace(kReserveWidthPx, layout);
 
             cwin::TaskbarReport report;
@@ -45,11 +49,17 @@ DWORD WINAPI ReportThread(LPVOID) {
                 report.alignment != last.alignment || report.dpi != last.dpi ||
                 report.autoHide != last.autoHide || report.reserved != last.reserved;
             if (changed) {
-                cwin::IpcClient::Send(cwin::kPipeName,
-                                      cwin::SerializeTaskbarReport(report));
+                const bool sent = cwin::IpcClient::Send(
+                    cwin::kPipeName, cwin::SerializeTaskbarReport(report));
+                CWIN_LOG("report tb=(%ld,%ld,%ld,%ld) carved=%d send=%d",
+                         report.taskbarRect.left, report.taskbarRect.top,
+                         report.taskbarRect.right, report.taskbarRect.bottom,
+                         report.reserved, sent ? 1 : 0);
                 last = report;
                 hasLast = true;
             }
+        } else {
+            CWIN_LOG("QueryLayout failed (no Shell_TrayWnd?)");
         }
         // Short sleeps so shutdown/restore happens promptly.
         for (int i = 0; i < 10 && g_running; ++i) Sleep(100);
