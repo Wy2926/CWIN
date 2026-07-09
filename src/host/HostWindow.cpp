@@ -8,6 +8,10 @@ constexpr int kDefaultWidth = 360;
 constexpr int kDefaultHeight = 48;
 constexpr UINT_PTR kTickTimerId = 1;
 constexpr UINT kTickIntervalMs = 1000;
+constexpr UINT WM_CWIN_TASKBAR_REPORT = WM_APP + 1;
+// Space near the taskbar's right edge occupied by the system tray / clock.
+constexpr int kTrayReservePx = 200;
+constexpr int kCapsuleMarginPx = 4;
 }  // namespace
 
 LRESULT CALLBACK HostWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -21,6 +25,9 @@ LRESULT CALLBACK HostWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         case WM_TIMER:
             if (self && wParam == kTickTimerId) self->OnTick();
+            return 0;
+        case WM_CWIN_TASKBAR_REPORT:
+            if (self) self->ApplyTaskbarReport();
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd, kTickTimerId);
@@ -36,6 +43,37 @@ void HostWindow::OnTick() {
         renderer_.DrawCapsules(scheduler_.VisibleCapsules());
         renderer_.Commit();
     }
+}
+
+void HostWindow::PostTaskbarReport(const TaskbarReport& report) {
+    {
+        std::lock_guard<std::mutex> lock(reportMutex_);
+        pendingReport_ = report;
+        hasReport_ = true;
+    }
+    if (hwnd_) PostMessageW(hwnd_, WM_CWIN_TASKBAR_REPORT, 0, 0);
+}
+
+void HostWindow::ApplyTaskbarReport() {
+    TaskbarReport report;
+    {
+        std::lock_guard<std::mutex> lock(reportMutex_);
+        if (!hasReport_) return;
+        report = pendingReport_;
+    }
+    const RECT& tb = report.taskbarRect;
+    const int tbHeight = tb.bottom - tb.top;
+    if (tbHeight <= 0) return;
+
+    // Companion strip: sit inside the taskbar, right-aligned before the tray.
+    const int height = tbHeight - 2 * kCapsuleMarginPx;
+    const int right = tb.right - kTrayReservePx;
+    const int x = right - kDefaultWidth;
+    const int y = tb.top + kCapsuleMarginPx;
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, kDefaultWidth, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    renderer_.DrawCapsules(scheduler_.VisibleCapsules());
+    renderer_.Commit();
 }
 
 bool HostWindow::Create(HINSTANCE instance, const Config& config) {
