@@ -12,9 +12,10 @@ namespace {
 std::atomic<bool> g_running{false};
 HANDLE g_thread = nullptr;
 
-// Width of the capsule gap carved out of the taskbar. Matches the host's
-// default capsule strip width; TODO: sync from config over IPC.
-constexpr int kReserveWidthPx = 360;
+// The capsule pill keeps a fixed width:height ratio so its design never
+// distorts across taskbar sizes / DPI. Must match the host's kPillRatio.
+constexpr float kPillRatio = 4.2f;
+constexpr int kReserveMarginPx = 8;
 
 // Measures the taskbar, carves the capsule gap, and pushes reports to the
 // host. Runs entirely inside explorer.exe; performs no rendering (the host's
@@ -31,7 +32,11 @@ DWORD WINAPI ReportThread(LPVOID) {
         cwin::TaskbarLayout layout;
         const bool measured = adapter && adapter->QueryLayout(layout);
         if (measured) {
-            const bool carved = adapter->ReserveSpace(kReserveWidthPx, layout);
+            const int tbHeight =
+                static_cast<int>(layout.taskbarRect.bottom - layout.taskbarRect.top);
+            const int reserveWidth =
+                static_cast<int>(tbHeight * kPillRatio) + 2 * kReserveMarginPx;
+            const bool carved = adapter->ReserveSpace(reserveWidth, layout);
 
             cwin::TaskbarReport report;
             report.taskbarRect = layout.taskbarRect;

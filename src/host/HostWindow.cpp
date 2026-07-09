@@ -6,8 +6,11 @@ namespace cwin {
 
 namespace {
 constexpr wchar_t kClassName[] = L"CWIN.HostWindow";
-constexpr int kDefaultWidth = 360;
+constexpr int kDefaultWidth = 202;
 constexpr int kDefaultHeight = 48;
+// Fixed width:height ratio of the capsule pill (matches the shell's
+// kPillRatio) so the design keeps its proportions at any taskbar size.
+constexpr float kPillRatio = 4.2f;
 constexpr UINT_PTR kTickTimerId = 1;
 constexpr UINT kTickIntervalMs = 1000;
 constexpr UINT WM_CWIN_TASKBAR_REPORT = WM_APP + 1;
@@ -74,16 +77,15 @@ void HostWindow::ApplyTaskbarReport() {
     const int height = tbHeight - 2 * kCapsuleMarginPx;
     const int y = tb.top + kCapsuleMarginPx;
 
-    // Prefer the exact gap the shell carved/computed; otherwise fall back to a
-    // fixed inset before the tray (companion overlay).
+    // The pill keeps a fixed width:height ratio; center it inside the gap the
+    // shell carved/computed, or fall back to a fixed inset before the tray.
+    const int width = static_cast<int>(height * kPillRatio);
     int x;
-    int width;
     const RECT& rr = report.reservedRect;
     if (rr.right > rr.left) {
-        x = rr.left + kCapsuleMarginPx;
-        width = (rr.right - rr.left) - 2 * kCapsuleMarginPx;
+        x = rr.left + (static_cast<int>(rr.right - rr.left) - width) / 2;
+        if (x < rr.left) x = rr.left;
     } else {
-        width = kDefaultWidth;
         x = (tb.right - kTrayReservePx) - width;
     }
     if (width <= 0) return;

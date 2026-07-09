@@ -12,8 +12,7 @@ namespace cwin {
 
 namespace {
 constexpr float kPi = 3.14159265f;
-constexpr float kStripRadius = 12.0f;
-// Translucent Win11-style card drawn inside the DComp tree (stands in for a
+// Translucent Win11-style pill drawn inside the DComp tree (stands in for a
 // real backdrop brush; WCA acrylic can't be used on a NOREDIRECTIONBITMAP
 // window). Alpha high enough that capsules are legible over any taskbar.
 const D2D1_COLOR_F kStripFill = D2D1::ColorF(0.12f, 0.12f, 0.14f, 0.72f);
@@ -57,23 +56,6 @@ HRESULT Renderer::Initialize(HWND hwnd) {
                              reinterpret_cast<IUnknown**>(dwriteFactory_.GetAddressOf()));
     if (FAILED(hr)) return hr;
 
-    hr = dwriteFactory_->CreateTextFormat(
-        L"Segoe UI Variable Display", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 21.0f, L"",
-        bigFormat_.GetAddressOf());
-    if (FAILED(hr)) return hr;
-
-    hr = dwriteFactory_->CreateTextFormat(
-        L"Segoe UI Variable Text", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0f, L"",
-        valueFormat_.GetAddressOf());
-    if (FAILED(hr)) return hr;
-
-    hr = dwriteFactory_->CreateTextFormat(
-        L"Segoe UI Variable Small", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10.0f, L"",
-        labelFormat_.GetAddressOf());
-    if (FAILED(hr)) return hr;
 
     hr = DCompositionCreateDevice(dxgiDevice.Get(), __uuidof(IDCompositionDevice),
                                   reinterpret_cast<void**>(dcompDevice_.GetAddressOf()));
@@ -139,28 +121,19 @@ HRESULT Renderer::DrawCapsules(const std::vector<CapsuleRenderData>& capsules) {
         ComPtr<ID2D1SolidColorBrush> stripFill, stripBorder;
         d2dContext_->CreateSolidColorBrush(kStripFill, stripFill.GetAddressOf());
         d2dContext_->CreateSolidColorBrush(kStripBorder, stripBorder.GetAddressOf());
+        // Dynamic-island style: one capsule at a time inside a fully rounded
+        // pill whose radius is half its height (fixed proportions).
+        const float pillRadius = static_cast<float>(height) * 0.5f - 0.5f;
         D2D1_ROUNDED_RECT strip = D2D1::RoundedRect(
             D2D1::RectF(0.5f, 0.5f, static_cast<float>(width) - 0.5f,
                         static_cast<float>(height) - 0.5f),
-            kStripRadius, kStripRadius);
+            pillRadius, pillRadius);
         if (stripFill) d2dContext_->FillRoundedRectangle(strip, stripFill.Get());
         if (stripBorder) d2dContext_->DrawRoundedRectangle(strip, stripBorder.Get(), 1.0f);
 
-        const float capsuleWidth = static_cast<float>(width) / capsules.size();
-        ComPtr<ID2D1SolidColorBrush> divider;
-        d2dContext_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f),
-                                           divider.GetAddressOf());
-        for (size_t i = 0; i < capsules.size(); ++i) {
-            const float left = capsuleWidth * i;
-            D2D1_RECT_F rect =
-                D2D1::RectF(left, 0.0f, left + capsuleWidth, static_cast<float>(height));
-            if (i > 0 && divider) {
-                const float h = static_cast<float>(height);
-                d2dContext_->DrawLine(D2D1::Point2F(left, h * 0.24f),
-                                      D2D1::Point2F(left, h * 0.76f), divider.Get(), 1.0f);
-            }
-            DrawCapsule(d2dContext_.Get(), capsules[i], rect);
-        }
+        D2D1_RECT_F rect =
+            D2D1::RectF(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+        DrawCapsule(d2dContext_.Get(), capsules.front(), rect);
     }
 
     hr = d2dContext_->EndDraw();
@@ -169,15 +142,25 @@ HRESULT Renderer::DrawCapsules(const std::vector<CapsuleRenderData>& capsules) {
     return hr;
 }
 
-void Renderer::DrawText(ID2D1DeviceContext* dc, const std::wstring& text,
-                        IDWriteTextFormat* format, const D2D1_RECT_F& rect,
+ComPtr<IDWriteTextFormat> Renderer::MakeFormat(float fontPx, DWRITE_FONT_WEIGHT weight) {
+    ComPtr<IDWriteTextFormat> format;
+    dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr, weight,
+                                     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                                     fontPx, L"", format.GetAddressOf());
+    return format;
+}
+
+void Renderer::DrawText(ID2D1DeviceContext* dc, const std::wstring& text, float fontPx,
+                        DWRITE_FONT_WEIGHT weight, const D2D1_RECT_F& rect,
                         ID2D1Brush* brush, DWRITE_TEXT_ALIGNMENT h,
                         DWRITE_PARAGRAPH_ALIGNMENT v) {
-    if (text.empty() || !format || !brush) return;
+    if (text.empty() || !brush) return;
+    auto format = MakeFormat(fontPx, weight);
+    if (!format) return;
     format->SetTextAlignment(h);
     format->SetParagraphAlignment(v);
-    dc->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), format, rect, brush,
-                  D2D1_DRAW_TEXT_OPTIONS_NONE);
+    dc->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), format.Get(), rect,
+                  brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
 namespace {
@@ -246,30 +229,80 @@ void Renderer::DrawCapsule(ID2D1DeviceContext* dc, const CapsuleRenderData& caps
     DrawGenericCapsule(dc, capsule, rect);
 }
 
-// Clock: pure typography — large time over a small weekday/date line.
+namespace {
+// Shared proportional geometry for the wide pill: a left icon slot + a content
+// column. All values are fractions of the pill height so proportions are fixed.
+struct PillLayout {
+    float h;
+    float pad;
+    float iconR;
+    D2D1_POINT_2F iconC;
+    float contentL;
+    float contentR;
+    float bigPx;    // primary line
+    float valuePx;  // value line
+    float labelPx;  // secondary line
+};
+
+PillLayout Layout(const D2D1_RECT_F& rect) {
+    PillLayout p;
+    p.h = rect.bottom - rect.top;
+    p.pad = p.h * 0.24f;
+    p.iconR = p.h * 0.26f;
+    p.iconC = D2D1::Point2F(rect.left + p.pad + p.iconR, rect.top + p.h * 0.5f);
+    p.contentL = p.iconC.x + p.iconR + p.h * 0.16f;
+    p.contentR = rect.right - p.h * 0.20f;
+    p.bigPx = p.h * 0.40f;
+    p.valuePx = p.h * 0.33f;
+    p.labelPx = p.h * 0.24f;
+    return p;
+}
+}  // namespace
+
+// Two-line content column: bold primary over a muted secondary, vertically
+// centered together. Used by clock / weather for a consistent rhythm.
+static void DrawTwoLine(Renderer* self, ID2D1DeviceContext* dc, const PillLayout& p,
+                        const D2D1_RECT_F& rect, const std::wstring& primary,
+                        const std::wstring& secondary, ID2D1Brush* text,
+                        ID2D1Brush* label);
+
+// Clock: live clock-face glyph + large time over weekday/date.
 void Renderer::DrawClockCapsule(ID2D1DeviceContext* dc, const CapsuleRenderData& capsule,
                                 const D2D1_RECT_F& rect) {
     auto text = Brush(dc, kTextColor);
     auto label = Brush(dc, kLabelColor);
-    if (!text || !label) return;
-    const float h = rect.bottom - rect.top;
-    D2D1_RECT_F timeRect = rect;
-    timeRect.bottom = rect.top + h * 0.66f;
-    D2D1_RECT_F dateRect = rect;
-    dateRect.top = rect.top + h * 0.62f;
-    dateRect.bottom = rect.bottom - h * 0.06f;
-    DrawText(dc, capsule.primaryText, bigFormat_.Get(), timeRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
-    DrawText(dc, capsule.secondaryText, labelFormat_.Get(), dateRect, label.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    auto face = Brush(dc, D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.55f));
+    auto accent = Brush(dc, D2D1::ColorF(0.42f, 0.66f, 1.0f, 0.95f));
+    if (!text || !label || !face || !accent) return;
+    const PillLayout p = Layout(rect);
+
+    ComPtr<ID2D1EllipseGeometry> ring;
+    d2dFactory_->CreateEllipseGeometry(D2D1::Ellipse(p.iconC, p.iconR, p.iconR),
+                                       ring.GetAddressOf());
+    if (ring) dc->DrawGeometry(ring.Get(), face.Get(), p.h * 0.045f);
+
+    int hh = 0, mm = 0;
+    swscanf_s(capsule.primaryText.c_str(), L"%d:%d", &hh, &mm);
+    const float minAngle = mm * 6.0f * kPi / 180.0f - kPi / 2.0f;
+    const float hourAngle = ((hh % 12) + mm / 60.0f) * 30.0f * kPi / 180.0f - kPi / 2.0f;
+    dc->DrawLine(p.iconC,
+                 D2D1::Point2F(p.iconC.x + std::cos(hourAngle) * p.iconR * 0.5f,
+                               p.iconC.y + std::sin(hourAngle) * p.iconR * 0.5f),
+                 text.Get(), p.h * 0.05f);
+    dc->DrawLine(p.iconC,
+                 D2D1::Point2F(p.iconC.x + std::cos(minAngle) * p.iconR * 0.78f,
+                               p.iconC.y + std::sin(minAngle) * p.iconR * 0.78f),
+                 accent.Get(), p.h * 0.04f);
+
+    DrawTwoLine(this, dc, p, rect, capsule.primaryText, capsule.secondaryText, text.Get(),
+                label.Get());
 }
 
-// CPU: load ring (green/amber/red) with % inside, label + fixed-scale
-// CPU-history sparkline on the right.
+// CPU: load ring (green/amber/red) with % inside; label + fixed-scale
+// CPU-history sparkline fill on the right.
 void Renderer::DrawCpuCapsule(ID2D1DeviceContext* dc, const CapsuleRenderData& capsule,
                               const D2D1_RECT_F& rect) {
-    const float h = rect.bottom - rect.top;
-    const float pad = h * 0.14f;
+    const PillLayout p = Layout(rect);
     float cpu = capsule.series.empty() ? 0.0f : capsule.series.back() / 100.0f;
     cpu = std::clamp(cpu, 0.0f, 1.0f);
 
@@ -279,38 +312,49 @@ void Renderer::DrawCpuCapsule(ID2D1DeviceContext* dc, const CapsuleRenderData& c
     auto loadBrush = Brush(dc, LoadColor(cpu));
     if (!text || !label || !track || !loadBrush) return;
 
-    const float radius = h * 0.30f;
-    const D2D1_POINT_2F center =
-        D2D1::Point2F(rect.left + pad + radius, rect.top + h * 0.5f);
     ComPtr<ID2D1EllipseGeometry> ring;
-    d2dFactory_->CreateEllipseGeometry(D2D1::Ellipse(center, radius, radius),
+    d2dFactory_->CreateEllipseGeometry(D2D1::Ellipse(p.iconC, p.iconR, p.iconR),
                                        ring.GetAddressOf());
-    if (ring) dc->DrawGeometry(ring.Get(), track.Get(), 2.5f);
-    DrawArc(d2dFactory_.Get(), dc, center, radius, cpu * 2.0f * kPi, loadBrush.Get(), 2.5f);
+    if (ring) dc->DrawGeometry(ring.Get(), track.Get(), p.h * 0.06f);
+    DrawArc(d2dFactory_.Get(), dc, p.iconC, p.iconR, cpu * 2.0f * kPi, loadBrush.Get(),
+            p.h * 0.06f);
 
-    D2D1_RECT_F ringRect = D2D1::RectF(center.x - radius, center.y - radius,
-                                       center.x + radius, center.y + radius);
-    DrawText(dc, capsule.primaryText, labelFormat_.Get(), ringRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    D2D1_RECT_F ringRect = D2D1::RectF(p.iconC.x - p.iconR, p.iconC.y - p.iconR,
+                                       p.iconC.x + p.iconR, p.iconC.y + p.iconR);
+    DrawText(dc, capsule.primaryText, p.labelPx, DWRITE_FONT_WEIGHT_SEMI_BOLD, ringRect,
+             text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 
-    const float x0 = center.x + radius + pad * 0.8f;
-    D2D1_RECT_F labelRect = D2D1::RectF(x0, rect.top + pad * 0.5f, rect.right - pad,
-                                        rect.top + h * 0.36f);
-    DrawText(dc, L"CPU", labelFormat_.Get(), labelRect, label.Get(),
-             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    D2D1_RECT_F labelRect = D2D1::RectF(p.contentL, rect.top + p.h * 0.16f, p.contentR,
+                                        rect.top + p.h * 0.48f);
+    DrawText(dc, L"CPU 使用率", p.labelPx, DWRITE_FONT_WEIGHT_NORMAL, labelRect,
+             label.Get(), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 
-    D2D1_RECT_F chart =
-        D2D1::RectF(x0, rect.top + h * 0.40f, rect.right - pad, rect.bottom - pad * 0.7f);
+    D2D1_RECT_F chart = D2D1::RectF(p.contentL, rect.top + p.h * 0.52f, p.contentR,
+                                    rect.bottom - p.h * 0.20f);
     if (capsule.series.size() >= 2 && chart.right > chart.left + 4.0f) {
         const float stepX = (chart.right - chart.left) / (capsule.series.size() - 1);
-        for (size_t i = 1; i < capsule.series.size(); ++i) {
-            auto pointAt = [&](size_t idx) {
-                const float norm = std::clamp(capsule.series[idx] / 100.0f, 0.0f, 1.0f);
-                return D2D1::Point2F(chart.left + stepX * idx,
-                                     chart.bottom - norm * (chart.bottom - chart.top));
-            };
-            dc->DrawLine(pointAt(i - 1), pointAt(i), loadBrush.Get(), 1.5f);
+        auto pointAt = [&](size_t idx) {
+            const float norm = std::clamp(capsule.series[idx] / 100.0f, 0.0f, 1.0f);
+            return D2D1::Point2F(chart.left + stepX * idx,
+                                 chart.bottom - norm * (chart.bottom - chart.top));
+        };
+        // Filled area under the CPU line for a fuller look.
+        ComPtr<ID2D1PathGeometry> area;
+        d2dFactory_->CreatePathGeometry(area.GetAddressOf());
+        ComPtr<ID2D1GeometrySink> sink;
+        if (area && SUCCEEDED(area->Open(sink.GetAddressOf()))) {
+            sink->BeginFigure(D2D1::Point2F(chart.left, chart.bottom),
+                              D2D1_FIGURE_BEGIN_FILLED);
+            for (size_t i = 0; i < capsule.series.size(); ++i) sink->AddLine(pointAt(i));
+            sink->AddLine(D2D1::Point2F(chart.right, chart.bottom));
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            auto fillBrush = Brush(dc, D2D1::ColorF(LoadColor(cpu).r, LoadColor(cpu).g,
+                                                    LoadColor(cpu).b, 0.20f));
+            if (fillBrush) dc->FillGeometry(area.Get(), fillBrush.Get());
         }
+        for (size_t i = 1; i < capsule.series.size(); ++i)
+            dc->DrawLine(pointAt(i - 1), pointAt(i), loadBrush.Get(), p.h * 0.04f);
     }
 }
 
@@ -322,14 +366,12 @@ void Renderer::DrawWeatherCapsule(ID2D1DeviceContext* dc,
     auto text = Brush(dc, kTextColor);
     auto label = Brush(dc, kLabelColor);
     auto sun = Brush(dc, D2D1::ColorF(1.0f, 0.80f, 0.40f, 0.95f));
-    auto cloud = Brush(dc, D2D1::ColorF(0.85f, 0.88f, 0.94f, 0.90f));
+    auto cloud = Brush(dc, D2D1::ColorF(0.85f, 0.88f, 0.94f, 0.92f));
     auto rain = Brush(dc, D2D1::ColorF(0.45f, 0.68f, 1.0f, 0.95f));
     if (!text || !label || !sun || !cloud || !rain) return;
 
-    const float h = rect.bottom - rect.top;
-    const float pad = h * 0.14f;
-    const D2D1_POINT_2F iconC =
-        D2D1::Point2F(rect.left + pad + h * 0.26f, rect.top + h * 0.5f);
+    const PillLayout p = Layout(rect);
+    const D2D1_POINT_2F iconC = p.iconC;
     const std::wstring& cond = capsule.secondaryText;
     const bool isSunny = cond.find(L"晴") != std::wstring::npos;
     const bool isRain = cond.find(L"雨") != std::wstring::npos ||
@@ -337,24 +379,22 @@ void Renderer::DrawWeatherCapsule(ID2D1DeviceContext* dc,
     const bool isSnow = cond.find(L"雪") != std::wstring::npos;
 
     if (isSunny) {
-        const float r = h * 0.14f;
+        const float r = p.h * 0.15f;
         dc->FillEllipse(D2D1::Ellipse(iconC, r, r), sun.Get());
         for (int i = 0; i < 8; ++i) {
             const float a = i * kPi / 4.0f;
-            dc->DrawLine(
-                D2D1::Point2F(iconC.x + std::cos(a) * (r + 3.0f),
-                              iconC.y + std::sin(a) * (r + 3.0f)),
-                D2D1::Point2F(iconC.x + std::cos(a) * (r + 7.0f),
-                              iconC.y + std::sin(a) * (r + 7.0f)),
-                sun.Get(), 1.8f);
+            dc->DrawLine(D2D1::Point2F(iconC.x + std::cos(a) * (r + p.h * 0.06f),
+                                       iconC.y + std::sin(a) * (r + p.h * 0.06f)),
+                         D2D1::Point2F(iconC.x + std::cos(a) * (r + p.h * 0.15f),
+                                       iconC.y + std::sin(a) * (r + p.h * 0.15f)),
+                         sun.Get(), p.h * 0.045f);
         }
     } else {
-        // Cloud: two lobes over a flat-bottomed base.
-        const float s = h * 0.16f;
+        const float s = p.h * 0.17f;
         const float cy = iconC.y - (isRain || isSnow ? s * 0.35f : 0.0f);
-        dc->FillEllipse(D2D1::Ellipse(D2D1::Point2F(iconC.x - s * 0.55f, cy), s * 0.75f,
-                                      s * 0.75f),
-                        cloud.Get());
+        dc->FillEllipse(
+            D2D1::Ellipse(D2D1::Point2F(iconC.x - s * 0.55f, cy), s * 0.75f, s * 0.75f),
+            cloud.Get());
         dc->FillEllipse(D2D1::Ellipse(D2D1::Point2F(iconC.x + s * 0.35f, cy - s * 0.30f),
                                       s * 0.90f, s * 0.90f),
                         cloud.Get());
@@ -368,31 +408,23 @@ void Renderer::DrawWeatherCapsule(ID2D1DeviceContext* dc,
                 const float x = iconC.x + i * s * 0.75f;
                 dc->DrawLine(D2D1::Point2F(x, cy + s * 1.05f),
                              D2D1::Point2F(x - s * 0.25f, cy + s * 1.65f), rain.Get(),
-                             1.8f);
+                             p.h * 0.045f);
             }
         } else if (isSnow) {
             for (int i = -1; i <= 1; ++i) {
                 const float x = iconC.x + i * s * 0.75f;
                 dc->FillEllipse(
-                    D2D1::Ellipse(D2D1::Point2F(x, cy + s * 1.35f), 1.8f, 1.8f),
+                    D2D1::Ellipse(D2D1::Point2F(x, cy + s * 1.35f), p.h * 0.04f,
+                                  p.h * 0.04f),
                     cloud.Get());
             }
         }
     }
 
-    const float x0 = rect.left + pad + h * 0.58f;
-    D2D1_RECT_F tempRect = D2D1::RectF(x0, rect.top, rect.right - pad * 0.5f,
-                                       rect.top + h * 0.66f);
-    D2D1_RECT_F condRect = D2D1::RectF(x0, rect.top + h * 0.62f, rect.right - pad * 0.5f,
-                                       rect.bottom - h * 0.06f);
-    DrawText(dc, capsule.primaryText, bigFormat_.Get(), tempRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
-    DrawText(dc, cond, labelFormat_.Get(), condRect, label.Get(),
-             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    DrawTwoLine(this, dc, p, rect, capsule.primaryText, cond, text.Get(), label.Get());
 }
 
-// Net speed: two color-coded rows — download (blue, down arrow) over upload
-// (green, up arrow).
+// Net speed: two color-coded rows — download (blue ▼) over upload (green ▲).
 void Renderer::DrawNetSpeedCapsule(ID2D1DeviceContext* dc,
                                    const CapsuleRenderData& capsule,
                                    const D2D1_RECT_F& rect) {
@@ -401,28 +433,28 @@ void Renderer::DrawNetSpeedCapsule(ID2D1DeviceContext* dc,
     auto up = Brush(dc, D2D1::ColorF(0.45f, 0.84f, 0.63f, 0.95f));
     if (!text || !down || !up) return;
 
-    const float h = rect.bottom - rect.top;
-    const float pad = h * 0.14f;
-    const float rowH = (h - pad * 1.6f) / 2.0f;
-    const float arrowX = rect.left + pad + 5.0f;
-    const float textX = arrowX + 10.0f;
+    const PillLayout p = Layout(rect);
+    const float rowY1 = rect.top + p.h * 0.30f;
+    const float rowY2 = rect.top + p.h * 0.70f;
+    const float arrowX = rect.left + p.pad + p.h * 0.10f;
+    const float textL = arrowX + p.h * 0.22f;
+    const float arrow = p.h * 0.20f;
 
-    const float y1 = rect.top + pad * 0.8f + rowH * 0.5f;
-    const float y2 = y1 + rowH;
-    DrawArrow(d2dFactory_.Get(), dc, D2D1::Point2F(arrowX, y1), 8.0f, false, down.Get());
-    DrawArrow(d2dFactory_.Get(), dc, D2D1::Point2F(arrowX, y2), 8.0f, true, up.Get());
+    DrawArrow(d2dFactory_.Get(), dc, D2D1::Point2F(arrowX, rowY1), arrow, false,
+              down.Get());
+    DrawArrow(d2dFactory_.Get(), dc, D2D1::Point2F(arrowX, rowY2), arrow, true, up.Get());
 
+    const float half = p.h * 0.22f;
     D2D1_RECT_F downRect =
-        D2D1::RectF(textX, y1 - rowH * 0.5f, rect.right - pad * 0.5f, y1 + rowH * 0.5f);
-    D2D1_RECT_F upRect =
-        D2D1::RectF(textX, y2 - rowH * 0.5f, rect.right - pad * 0.5f, y2 + rowH * 0.5f);
-    DrawText(dc, capsule.primaryText, valueFormat_.Get(), downRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    DrawText(dc, capsule.secondaryText, valueFormat_.Get(), upRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        D2D1::RectF(textL, rowY1 - half, p.contentR, rowY1 + half);
+    D2D1_RECT_F upRect = D2D1::RectF(textL, rowY2 - half, p.contentR, rowY2 + half);
+    DrawText(dc, capsule.primaryText, p.valuePx, DWRITE_FONT_WEIGHT_SEMI_BOLD, downRect,
+             text.Get(), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    DrawText(dc, capsule.secondaryText, p.valuePx, DWRITE_FONT_WEIGHT_SEMI_BOLD, upRect,
+             text.Get(), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 }
 
-// Fallback for unknown capsule ids (future plugins): small label over value.
+// Fallback for unknown capsule ids (future plugins): centered value + label.
 void Renderer::DrawGenericCapsule(ID2D1DeviceContext* dc,
                                   const CapsuleRenderData& capsule,
                                   const D2D1_RECT_F& rect) {
@@ -430,14 +462,28 @@ void Renderer::DrawGenericCapsule(ID2D1DeviceContext* dc,
     auto label = Brush(dc, kLabelColor);
     if (!text || !label) return;
     const float h = rect.bottom - rect.top;
-    D2D1_RECT_F labelRect = rect;
-    labelRect.bottom = rect.top + h * 0.38f;
     D2D1_RECT_F valueRect = rect;
-    valueRect.top = labelRect.bottom;
-    DrawText(dc, capsule.secondaryText, labelFormat_.Get(), labelRect, label.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    DrawText(dc, capsule.primaryText, valueFormat_.Get(), valueRect, text.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    valueRect.bottom = rect.top + h * 0.62f;
+    D2D1_RECT_F labelRect = rect;
+    labelRect.top = rect.top + h * 0.56f;
+    DrawText(dc, capsule.primaryText, h * 0.34f, DWRITE_FONT_WEIGHT_SEMI_BOLD, valueRect,
+             text.Get(), DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+    DrawText(dc, capsule.secondaryText, h * 0.24f, DWRITE_FONT_WEIGHT_NORMAL, labelRect,
+             label.Get(), DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+}
+
+static void DrawTwoLine(Renderer* self, ID2D1DeviceContext* dc, const PillLayout& p,
+                        const D2D1_RECT_F& rect, const std::wstring& primary,
+                        const std::wstring& secondary, ID2D1Brush* text,
+                        ID2D1Brush* label) {
+    D2D1_RECT_F line1 = D2D1::RectF(p.contentL, rect.top + p.h * 0.14f, p.contentR,
+                                    rect.top + p.h * 0.60f);
+    D2D1_RECT_F line2 = D2D1::RectF(p.contentL, rect.top + p.h * 0.56f, p.contentR,
+                                    rect.bottom - p.h * 0.12f);
+    self->DrawText(dc, primary, p.bigPx, DWRITE_FONT_WEIGHT_SEMI_BOLD, line1, text,
+                   DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_FAR);
+    self->DrawText(dc, secondary, p.labelPx, DWRITE_FONT_WEIGHT_NORMAL, line2, label,
+                   DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
 void Renderer::Commit() {
