@@ -24,10 +24,14 @@ public:
     bool Refresh(ProviderValue& out) override {
         SYSTEMTIME st;
         GetLocalTime(&st);
-        wchar_t buf[16];
-        swprintf_s(buf, L"%02u:%02u", st.wHour, st.wMinute);
-        out.primaryText = buf;
-        out.secondaryText = L"";
+        wchar_t time[16];
+        swprintf_s(time, L"%02u:%02u", st.wHour, st.wMinute);
+        static const wchar_t* kWeekday[] = {L"周日", L"周一", L"周二", L"周三",
+                                            L"周四", L"周五", L"周六"};
+        wchar_t date[32];
+        swprintf_s(date, L"%s %u/%u", kWeekday[st.wDayOfWeek % 7], st.wMonth, st.wDay);
+        out.primaryText = time;
+        out.secondaryText = date;
         return true;
     }
 };
@@ -116,8 +120,8 @@ public:
         lastOut_ = outOctets;
         lastTick_ = now;
 
-        out.primaryText = FormatSpeed(downBps);
-        out.secondaryText = L"↓ " + FormatSpeed(downBps) + L"  ↑ " + FormatSpeed(upBps);
+        out.primaryText = FormatSpeed(downBps);   // download
+        out.secondaryText = FormatSpeed(upBps);   // upload
         return true;
     }
 
