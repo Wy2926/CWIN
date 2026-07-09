@@ -4,13 +4,26 @@ namespace cwin {
 
 namespace {
 constexpr wchar_t kClassName[] = L"CWIN.HostWindow";
-constexpr int kDefaultWidth = 320;
+constexpr int kDefaultWidth = 360;
 constexpr int kDefaultHeight = 48;
+constexpr UINT_PTR kTickTimerId = 1;
+constexpr UINT kTickIntervalMs = 1000;
 }  // namespace
 
 LRESULT CALLBACK HostWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* self = reinterpret_cast<HostWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
+        case WM_NCCREATE: {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                              reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
+        case WM_TIMER:
+            if (self && wParam == kTickTimerId) self->OnTick();
+            return 0;
         case WM_DESTROY:
+            KillTimer(hwnd, kTickTimerId);
             PostQuitMessage(0);
             return 0;
         default:
@@ -18,7 +31,16 @@ LRESULT CALLBACK HostWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 }
 
-bool HostWindow::Create(HINSTANCE instance) {
+void HostWindow::OnTick() {
+    if (scheduler_.Tick()) {
+        renderer_.DrawCapsules(scheduler_.VisibleCapsules());
+        renderer_.Commit();
+    }
+}
+
+bool HostWindow::Create(HINSTANCE instance, const Config& config) {
+    scheduler_.InitFromConfig(config);
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WndProc;
@@ -38,14 +60,17 @@ bool HostWindow::Create(HINSTANCE instance) {
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
         kClassName, L"CWIN", WS_POPUP,
         x, y, kDefaultWidth, kDefaultHeight,
-        nullptr, nullptr, instance, nullptr);
+        nullptr, nullptr, instance, this);
     if (!hwnd_) return false;
 
     if (FAILED(renderer_.Initialize(hwnd_))) return false;
     ApplyBackdrop(hwnd_, DetectBackdropKind());
-    renderer_.DrawPlaceholder();
+
+    scheduler_.Tick();
+    renderer_.DrawCapsules(scheduler_.VisibleCapsules());
     renderer_.Commit();
 
+    SetTimer(hwnd_, kTickTimerId, kTickIntervalMs, nullptr);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     return true;
 }

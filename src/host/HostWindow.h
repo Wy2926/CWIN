@@ -2,6 +2,8 @@
 #include <windows.h>
 
 #include "Backdrop.h"
+#include "CapsuleScheduler.h"
+#include "Config.h"
 #include "Renderer.h"
 
 namespace cwin {
@@ -10,15 +12,17 @@ namespace cwin {
 // the capsules (companion-window mode; injection reserves the space).
 class HostWindow {
 public:
-    bool Create(HINSTANCE instance);
+    bool Create(HINSTANCE instance, const Config& config);
     HWND Handle() const { return hwnd_; }
     int RunMessageLoop();
 
 private:
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+    void OnTick();
 
     HWND hwnd_ = nullptr;
     Renderer renderer_;
+    CapsuleScheduler scheduler_;
 };
 
 } // namespace cwin
