@@ -6,3 +6,4 @@ add_library(cwin_shell SHARED
 )
 set_target_properties(cwin_shell PROPERTIES OUTPUT_NAME "CWIN.Shell")
 target_include_directories(cwin_shell PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(cwin_shell PRIVATE cwin_ipc cwin_common shell32 advapi32)
