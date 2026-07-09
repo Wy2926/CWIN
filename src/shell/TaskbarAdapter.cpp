@@ -55,29 +55,124 @@ UINT QueryDpi(HWND hwnd) {
     return 96;
 }
 
-// Shared measurement; the two generations differ only in child structure,
-// which matters for space reservation (TODO), not for the outer rect.
+HWND FindTray() { return FindWindowW(L"Shell_TrayWnd", nullptr); }
+
+// The system-tray/clock cluster; the capsule gap sits immediately to its left.
+HWND FindTrayNotify(HWND tray) {
+    return tray ? FindWindowExW(tray, nullptr, L"TrayNotifyWnd", nullptr) : nullptr;
+}
+
+// Classic (21H2) task-band container we shrink to open the gap.
+HWND FindReBar(HWND tray) {
+    return tray ? FindWindowExW(tray, nullptr, L"ReBarWindow32", nullptr) : nullptr;
+}
+
 class TaskbarAdapterBase : public ITaskbarAdapter {
 public:
     bool QueryLayout(TaskbarLayout& out) override {
-        HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        HWND tray = FindTray();
         if (!tray) return false;
         if (!GetWindowRect(tray, &out.taskbarRect)) return false;
         out.dpi = QueryDpi(tray);
         out.alignment = ReadAlignment();
         out.autoHide = ReadAutoHide();
-        out.reservedRect = {};
+        out.reservedRect = ComputeReservedRect(tray, out.taskbarRect, lastWidthPx_);
         return true;
     }
 
-    bool ReserveSpace(int /*widthPx*/) override {
-        // TODO: carve capsule space out of the taskbar layout.
-        return false;
+    void Restore() override {
+        if (!reshaped_) return;
+        HWND rebar = FindReBar(FindTray());
+        if (rebar && (savedRebar_.right - savedRebar_.left) > 0) {
+            SetWindowPos(rebar, nullptr, savedRebar_.left, savedRebar_.top,
+                         savedRebar_.right - savedRebar_.left,
+                         savedRebar_.bottom - savedRebar_.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        reshaped_ = false;
+    }
+
+protected:
+    // Reserved gap = [trayLeft - widthPx, trayLeft) spanning taskbar height.
+    static RECT ComputeReservedRect(HWND tray, const RECT& tb, int widthPx) {
+        RECT reserved{};
+        if (widthPx <= 0) return reserved;
+        LONG gapRight = tb.right;
+        RECT trayRect{};
+        HWND trayNotify = FindTrayNotify(tray);
+        if (trayNotify && GetWindowRect(trayNotify, &trayRect)) gapRight = trayRect.left;
+        reserved.right = gapRight;
+        reserved.left = gapRight - widthPx;
+        reserved.top = tb.top;
+        reserved.bottom = tb.bottom;
+        return reserved;
+    }
+
+    int lastWidthPx_ = 0;
+    bool reshaped_ = false;
+    RECT savedRebar_{};
+};
+
+// Win11 21H2 classic taskbar: task band is a real HWND (ReBarWindow32) we can
+// shrink so its right edge stops before the reserved gap.
+class LegacyTaskbarAdapter final : public TaskbarAdapterBase {
+public:
+    bool ReserveSpace(int widthPx, TaskbarLayout& out) override {
+        lastWidthPx_ = widthPx;
+        HWND tray = FindTray();
+        if (!tray) return false;
+        RECT tb{};
+        if (!GetWindowRect(tray, &tb)) return false;
+        out.reservedRect = ComputeReservedRect(tray, tb, widthPx);
+        if (widthPx <= 0) {
+            Restore();
+            return false;
+        }
+
+        HWND rebar = FindReBar(tray);
+        if (!rebar) return false;
+        RECT rebarRect{};
+        if (!GetWindowRect(rebar, &rebarRect)) return false;
+
+        if (!reshaped_) {
+            savedRebar_ = MapToParent(tray, rebarRect);
+            reshaped_ = true;
+        }
+        const RECT target = MapToParent(tray, rebarRect);
+        const LONG gapLeftClient = out.reservedRect.left - tb.left;
+        LONG newWidth = gapLeftClient - target.left;
+        if (newWidth < 0) newWidth = 0;
+        SetWindowPos(rebar, nullptr, target.left, target.top, newWidth,
+                     target.bottom - target.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return true;
+    }
+
+private:
+    static RECT MapToParent(HWND parent, RECT screenRect) {
+        POINT tl{screenRect.left, screenRect.top};
+        POINT br{screenRect.right, screenRect.bottom};
+        ScreenToClient(parent, &tl);
+        ScreenToClient(parent, &br);
+        return RECT{tl.x, tl.y, br.x, br.y};
     }
 };
 
-class ModernTaskbarAdapter final : public TaskbarAdapterBase {};  // 22H2+
-class LegacyTaskbarAdapter final : public TaskbarAdapterBase {};  // 21H2
+// Win11 22H2+ XAML taskbar: content lives in a composition island with no
+// per-band HWNDs to resize. We compute the reserved rect (default center
+// alignment usually leaves this area empty) and let the host overlay there.
+// Physical carving is not attempted to avoid destabilizing the XAML shell.
+class ModernTaskbarAdapter final : public TaskbarAdapterBase {
+public:
+    bool ReserveSpace(int widthPx, TaskbarLayout& out) override {
+        lastWidthPx_ = widthPx;
+        HWND tray = FindTray();
+        if (!tray) return false;
+        RECT tb{};
+        if (!GetWindowRect(tray, &tb)) return false;
+        out.reservedRect = ComputeReservedRect(tray, tb, widthPx);
+        return false;  // compute-only; companion overlay
+    }
+};
 
 }  // namespace
 
