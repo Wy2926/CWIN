@@ -34,7 +34,8 @@ private:
     size_t rotationOffset_ = 0;
     unsigned rotationIntervalMs_ = 10000;
     ULONGLONG lastRotationTick_ = 0;
-    static constexpr size_t kVisibleCount = 3;
+    // Dynamic-island style: one capsule at a time, rotation cycles through all.
+    static constexpr size_t kVisibleCount = 1;
 };
 
 } // namespace cwin
