@@ -7,13 +7,12 @@
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     cwin::Config config = cwin::Config::LoadOrDefault();
-    (void)config;
 
     cwin::IpcServer ipc;
     ipc.Start(L"\\\\.\\pipe\\cwin", [](const std::string&) { return std::string("{}"); });
 
     cwin::HostWindow window;
-    if (!window.Create(instance)) return 1;
+    if (!window.Create(instance, config)) return 1;
 
     const int rc = window.RunMessageLoop();
     ipc.Stop();
